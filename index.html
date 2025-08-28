@@ -159,6 +159,33 @@
             transform: translateY(0);
         }
 
+        .play-btn {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ffd93d 100%);
+            color: #333;
+            font-weight: 700;
+            border-radius: 50px;
+            padding: 12px 20px;
+            margin-left: 10px;
+            min-width: 100px;
+        }
+
+        .audio-controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .tempo-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         .result-area {
             min-height: 200px;
             background: rgba(0, 0, 0, 0.2);
@@ -327,6 +354,14 @@
                         </div>
                     </div>
                     <button class="btn btn-primary" onclick="generateProgression()">Generate Progression</button>
+                    <div class="audio-controls">
+                        <button class="btn play-btn" onclick="playProgression()" id="playBtn">▶ Play</button>
+                        <div class="tempo-control">
+                            <label>BPM:</label>
+                            <input type="range" id="tempoSlider" min="60" max="140" value="120" style="width: 100px;">
+                            <span id="tempoValue">120</span>
+                        </div>
+                    </div>
                 </div>
                 <div class="result-area" id="progressionResult">
                     <p style="opacity: 0.6; text-align: center;">Click "Generate Progression" to discover new chord sequences</p>
@@ -372,6 +407,9 @@
                         </div>
                     </div>
                     <button class="btn btn-primary" onclick="findMelodicPath()">Find Melodic Path</button>
+                    <div class="audio-controls">
+                        <button class="btn play-btn" onclick="playMelody()" id="melodyPlayBtn">▶ Play Melody</button>
+                    </div>
                 </div>
                 <div class="result-area" id="melodicResult">
                     <p style="opacity: 0.6; text-align: center;">Generate a melodic pathway between notes</p>
@@ -563,6 +601,102 @@
 
         // Initialize the chord graph
         const chordGraph = new ChordGraph();
+        let currentProgression = [];
+        let currentMelody = [];
+        
+        // Audio System using Tone.js
+        class AudioEngine {
+            constructor() {
+                this.synth = null;
+                this.polySynth = null;
+                this.isPlaying = false;
+                this.initializeAudio();
+            }
+
+            async initializeAudio() {
+                if (typeof Tone !== 'undefined') {
+                    // Create synthesizers
+                    this.synth = new Tone.Synth({
+                        oscillator: { type: "sine" },
+                        envelope: { attack: 0.1, decay: 0.3, sustain: 0.5, release: 0.8 }
+                    }).toDestination();
+
+                    this.polySynth = new Tone.PolySynth(Tone.Synth, {
+                        oscillator: { type: "sawtooth" },
+                        envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 1.2 }
+                    }).toDestination();
+                }
+            }
+
+            async startAudio() {
+                if (Tone.context.state !== 'running') {
+                    await Tone.start();
+                }
+            }
+
+            getChordNotes(chordName) {
+                const chordMap = {
+                    'C': ['C4', 'E4', 'G4'],
+                    'Dm': ['D4', 'F4', 'A4'],
+                    'Em': ['E4', 'G4', 'B4'],
+                    'F': ['F4', 'A4', 'C5'],
+                    'G': ['G4', 'B4', 'D5'],
+                    'Am': ['A4', 'C5', 'E5'],
+                    'Bdim': ['B4', 'D5', 'F5']
+                };
+                return chordMap[chordName] || ['C4', 'E4', 'G4'];
+            }
+
+            async playChordProgression(progression, tempo = 120) {
+                if (!this.polySynth) return;
+                
+                await this.startAudio();
+                this.isPlaying = true;
+                
+                const beatDuration = 60 / tempo;
+                Tone.Transport.bpm.value = tempo;
+
+                const part = new Tone.Part((time, chord) => {
+                    const notes = this.getChordNotes(chord);
+                    this.polySynth.triggerAttackRelease(notes, '2n', time);
+                }, progression.map((chord, index) => [index * beatDuration * 2, chord]));
+
+                part.start();
+                Tone.Transport.start();
+
+                setTimeout(() => {
+                    part.stop();
+                    Tone.Transport.stop();
+                    this.isPlaying = false;
+                    document.getElementById('playBtn').textContent = '▶ Play';
+                }, progression.length * beatDuration * 2 * 1000);
+            }
+
+            async playMelodyLine(melody, tempo = 120) {
+                if (!this.synth) return;
+                
+                await this.startAudio();
+                this.isPlaying = true;
+                
+                const beatDuration = 60 / tempo;
+                
+                const part = new Tone.Part((time, note) => {
+                    this.synth.triggerAttackRelease(note + '4', '4n', time);
+                }, melody.map((note, index) => [index * beatDuration, note]));
+
+                part.start();
+                Tone.Transport.start();
+
+                setTimeout(() => {
+                    part.stop();
+                    Tone.Transport.stop();
+                    this.isPlaying = false;
+                    document.getElementById('melodyPlayBtn').textContent = '▶ Play Melody';
+                }, melody.length * beatDuration * 1000);
+            }
+        }
+
+        const audioEngine = new AudioEngine();
 
         // UI Event Handlers
         function generateProgression() {
@@ -571,8 +705,23 @@
             const length = parseInt(document.getElementById('progressionLength').value);
             
             const progression = chordGraph.findProgression(start, end, length);
+            currentProgression = progression;
             displayProgression(progression);
             highlightPath(progression);
+        }
+
+        async function playProgression() {
+            if (!currentProgression.length) {
+                generateProgression();
+            }
+            
+            const tempo = parseInt(document.getElementById('tempoSlider').value);
+            const playBtn = document.getElementById('playBtn');
+            
+            if (audioEngine.isPlaying) return;
+            
+            playBtn.textContent = '⏸ Playing...';
+            await audioEngine.playChordProgression(currentProgression, tempo);
         }
 
         function findMelodicPath() {
@@ -581,7 +730,21 @@
             const scaleType = document.getElementById('scaleType').value;
             
             const path = chordGraph.findMelodicPath(startNote, endNote, scaleType);
+            currentMelody = path;
             displayMelodicPath(path, scaleType);
+        }
+
+        async function playMelody() {
+            if (!currentMelody.length) {
+                findMelodicPath();
+            }
+            
+            const playBtn = document.getElementById('melodyPlayBtn');
+            
+            if (audioEngine.isPlaying) return;
+            
+            playBtn.textContent = '⏸ Playing...';
+            await audioEngine.playMelodyLine(currentMelody, 100);
         }
 
         function displayProgression(progression) {
@@ -733,6 +896,10 @@
         // Initialize UI
         document.getElementById('progressionLength').addEventListener('input', function() {
             document.getElementById('lengthValue').textContent = this.value;
+        });
+
+        document.getElementById('tempoSlider').addEventListener('input', function() {
+            document.getElementById('tempoValue').textContent = this.value;
         });
 
         // Initialize graph on load
